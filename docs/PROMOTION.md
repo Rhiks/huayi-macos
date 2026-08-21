@@ -78,7 +78,7 @@ Huayi 开源了，一个用 Swift + AppKit 写的原生 macOS 划词翻译工具
 
 短词短句可以走快速翻译；长文和技术语境可以走本机 AI。长文面板支持滚动，明确切到 AI 精译后，正文只会发到本机 Ollama，不会悄悄改走在线服务。
 
-项目用 Swift + AppKit 编写，没有 Electron，也没有分析遥测。目前是 source-first 版本，需要从源码安装，macOS 13+ 可用，本地 12B 模型更推荐 Apple Silicon。
+项目用 Swift + AppKit 编写，没有 Electron，也没有分析遥测。当前需要从源码安装，支持 macOS 13 及以上版本；本机 12B 模型更推荐 Apple Silicon。
 
 GitHub：Rhiks/huayi-macos
 
@@ -122,7 +122,7 @@ Huayi 为英语学习和论文阅读里的高频小查询而做。遇到生词�
 
 AI 精译模式只访问本机 Ollama，不做静默在线回退。自动和极速模式的数据路径、Google 未文档化端点的限制、Microsoft Neural 语音以及剪贴板行为，都在仓库的隐私说明中公开列出。
 
-项目目前采用 source-first 发布方式，支持 macOS 13 及以上版本。本地 12B 模型主要面向 Apple Silicon。源码、安装步骤与隐私边界见：https://github.com/Rhiks/huayi-macos
+项目当前只提供源码安装，支持 macOS 13 及以上版本。本机 12B 模型主要面向 Apple Silicon。源码、安装步骤与隐私边界见：https://github.com/Rhiks/huayi-macos
 
 ## 截图拍摄清单
 
@@ -140,7 +140,7 @@ AI 精译模式只访问本机 Ollama，不做静默在线回退。自动和极�
 1. GitHub 仓库设置 Social Preview 图。
 2. 发布一条带横版头图的短帖，正文使用“通用短帖”。
 3. 小红书使用 3～4 张真实运行截图，首图可用横版头图裁成 4:3。
-4. V2EX、少数派或掘金使用长版说明，并明确 source-first 和在线数据边界。
+4. V2EX、少数派或掘金使用长版说明，并明确当前需要源码安装及在线数据边界。
 5. 收集 Issue 后再发布带签名、公证和自动更新的正式安装包。
 
 ## 推荐 Topics
