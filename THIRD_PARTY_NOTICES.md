@@ -4,23 +4,7 @@ Huayi's MIT license covers this repository's source code only. The following opt
 
 ## Apple system frameworks and tools
 
-Huayi uses AppKit, ApplicationServices, AVFoundation, NaturalLanguage, /usr/bin/say, and /usr/bin/afplay provided by macOS. Their use is governed by Apple's applicable agreements.
-
-## Ollama
-
-Ollama is an external local model runtime. Huayi communicates only with its loopback API at 127.0.0.1:11434.
-
-- Project: <https://github.com/ollama/ollama>
-- License: <https://github.com/ollama/ollama/blob/main/LICENSE>
-
-## TranslateGemma and Gemma
-
-Huayi expects users to download translategemma:12b themselves. No model weights or upstream chat templates are included in this repository; Huayi sends its own text-only translation prompt to the Ollama-packaged model.
-
-- Official model card: <https://huggingface.co/google/translategemma-12b-it>
-- Gemma Terms: <https://ai.google.dev/gemma/terms>
-
-The model and weights are not relicensed under Huayi's MIT license.
+Huayi uses AppKit, ApplicationServices, AVFoundation, NaturalLanguage, Translation, /usr/bin/say, and /usr/bin/afplay provided by macOS. Their use is governed by Apple's applicable agreements. Translation language resources are downloaded and managed by macOS rather than bundled with Huayi.
 
 ## edge-tts
 

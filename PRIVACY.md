@@ -9,12 +9,12 @@ Huayi 不包含账号系统、广告、崩溃上报或分析遥测。它只在�
 | 功能 | 文本去向 | 本地持久化 |
 | --- | --- | --- |
 | 极速翻译 | 通过 HTTPS POST 发往 translate.googleapis.com | 使用无 Cookie、无 URLCache 的临时会话；Huayi 不落盘 |
-| 自动模式 | 根据文本路由到 Google 或本机 Ollama；AI 不可用时可能回退 Google | 同上 |
-| AI 精译 | 只发往 127.0.0.1:11434 的 Ollama | Huayi 不落盘；Ollama 的自身行为由其配置决定 |
+| 自动模式 | 优先由 Apple Translation 本机处理；系统翻译不可用时可能回退 Google | Huayi 不落盘 |
+| Apple 本机 | 由 macOS Translation 框架本机处理 | Huayi 不落盘；语言资源由 macOS 管理 |
 | 系统语音 | 英语通过标准输入交给本机 /usr/bin/say；其他语言使用 AVSpeechSynthesizer | 全部在本机处理；不把正文放入进程参数或文本文件 |
 | Neural 在线语音 | 通过 edge-tts 发往 Microsoft | 生成的 MP3 以 0600 权限暂存，播放、取消或正常退出时删除；异常遗留会在后续启动时清理 |
 
-明确选择 **AI 精译** 时，Huayi 不会静默回退到 Google。**自动**模式为追求可用性仍可能在线回退，因此敏感文本应使用已确认就绪的 **AI 精译**模式。
+明确选择 **Apple 本机** 时，Huayi 不会静默回退到 Google。**自动**模式为追求可用性仍可能在线回退，因此敏感文本应使用已确认就绪的 **Apple 本机**模式。
 
 ## 辅助功能与剪贴板
 
@@ -37,4 +37,4 @@ Huayi 需要 macOS 辅助功能权限读取当前选区。目标应用无法直�
 
 在线服务适用各自的隐私政策与条款。Google 翻译路径是未文档化端点，稳定性和条款可能变化。Microsoft Neural 语音由未捆绑的 edge-tts 调用。使用在线模式前，请自行判断文本是否适合发送给第三方。
 
-Huayi 与 Apple、Google、Microsoft、Ollama 均无隶属、赞助或背书关系。
+Huayi 与 Apple、Google、Microsoft 均无隶属、赞助或背书关系。

@@ -2,6 +2,7 @@ import Cocoa
 import ApplicationServices
 import AVFoundation
 import NaturalLanguage
+import Translation
 import os
 import Darwin
 
@@ -17,7 +18,6 @@ func log(_ message: String) {
 
 private let maxSelectionTranslateChars = 6000
 private let maxSelectionSpeakChars = 360
-private let localAIModel = "translategemma:12b"
 
 private enum TranslationMode: String, CaseIterable {
   case automatic
@@ -26,186 +26,21 @@ private enum TranslationMode: String, CaseIterable {
 
   var title: String {
     switch self {
-    case .automatic: return "自动（短文极速，长文 AI）"
-    case .fast: return "极速（Google）"
-    case .ai: return "AI 精译（本机 TranslateGemma）"
+    case .automatic: return "自动（Apple 本机优先）"
+    case .fast: return "在线备用（Google）"
+    case .ai: return "本机（Apple Translation）"
     }
   }
 }
 
 private enum TranslationEngine: Equatable {
   case google
-  case localAI
+  case apple
 }
 
 private struct TranslationOutput {
   let text: String
   let source: String
-}
-
-final class OllamaStreamRequest: NSObject, URLSessionDataDelegate {
-  private let delegateQueue: OperationQueue = {
-    let queue = OperationQueue()
-    queue.name = "io.github.rhiks.huayi.ollama-stream"
-    queue.maxConcurrentOperationCount = 1
-    return queue
-  }()
-  private let lifecycleLock = NSLock()
-  private var session: URLSession?
-  private var task: URLSessionDataTask?
-  private var buffer = Data()
-  private var accumulated = ""
-  private var responseStatus = 0
-  private var serverError: String?
-  private var sawTerminalFrame = false
-  private var terminalReason: String?
-  private var lastProgressAt = Date.distantPast
-  private var lastProgressLength = 0
-  private var completed = false
-  private let onProgress: (String) -> Void
-  private let completion: (Result<String, Error>) -> Void
-
-  init(onProgress: @escaping (String) -> Void, completion: @escaping (Result<String, Error>) -> Void) {
-    self.onProgress = onProgress
-    self.completion = completion
-  }
-
-  func start(request: URLRequest) -> URLSessionDataTask {
-    let configuration = URLSessionConfiguration.default
-    configuration.timeoutIntervalForRequest = 180
-    configuration.timeoutIntervalForResource = 300
-    let session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
-    lifecycleLock.lock()
-    self.session = session
-    let task = session.dataTask(with: request)
-    self.task = task
-    lifecycleLock.unlock()
-    task.resume()
-    return task
-  }
-
-  func cancel() {
-    lifecycleLock.lock()
-    let task = self.task
-    let session = self.session
-    lifecycleLock.unlock()
-    task?.cancel()
-    session?.invalidateAndCancel()
-  }
-
-  func urlSession(
-    _ session: URLSession,
-    dataTask: URLSessionDataTask,
-    didReceive response: URLResponse,
-    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-  ) {
-    responseStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
-    completionHandler(.allow)
-  }
-
-  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-    buffer.append(data)
-    consumeCompleteLines()
-  }
-
-  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    if !buffer.isEmpty {
-      parseLine(buffer)
-      buffer.removeAll(keepingCapacity: false)
-    }
-    guard !completed else { return }
-    completed = true
-    defer {
-      self.lifecycleLock.lock()
-      self.task = nil
-      self.session = nil
-      self.lifecycleLock.unlock()
-      session.finishTasksAndInvalidate()
-    }
-
-    if let error {
-      completion(.failure(error))
-      return
-    }
-    if !(200...299).contains(responseStatus) {
-      completion(.failure(NSError(
-        domain: "TranslateGemma",
-        code: responseStatus,
-        userInfo: [NSLocalizedDescriptionKey: serverError ?? "HTTP \(responseStatus)"]
-      )))
-      return
-    }
-    if let serverError {
-      completion(.failure(NSError(
-        domain: "TranslateGemma",
-        code: -7,
-        userInfo: [NSLocalizedDescriptionKey: serverError]
-      )))
-      return
-    }
-    guard sawTerminalFrame else {
-      completion(.failure(NSError(
-        domain: "TranslateGemma",
-        code: -8,
-        userInfo: [NSLocalizedDescriptionKey: "本地 AI 流式响应意外中断，未收到完成标记"]
-      )))
-      return
-    }
-    guard terminalReason == "stop" else {
-      let message: String
-      if terminalReason == "length" {
-        message = "本地 AI 输出达到长度上限，译文不完整"
-      } else {
-        message = "本地 AI 异常结束：\(terminalReason ?? "未知原因")"
-      }
-      completion(.failure(NSError(
-        domain: "TranslateGemma",
-        code: -9,
-        userInfo: [NSLocalizedDescriptionKey: message]
-      )))
-      return
-    }
-    let translated = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !translated.isEmpty else {
-      completion(.failure(NSError(domain: "TranslateGemma", code: -5, userInfo: [NSLocalizedDescriptionKey: serverError ?? "本地 AI 译文为空"])))
-      return
-    }
-    completion(.success(translated))
-  }
-
-  private func consumeCompleteLines() {
-    while let newline = buffer.firstIndex(of: 0x0A) {
-      let line = Data(buffer[..<newline])
-      buffer.removeSubrange(buffer.startIndex...newline)
-      parseLine(line)
-    }
-  }
-
-  private func parseLine(_ line: Data) {
-    guard let decoded = String(data: line, encoding: .utf8) else { return }
-    let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty,
-          let data = trimmed.data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-    if let message = object["error"] as? String {
-      serverError = message
-    }
-    if object["done"] as? Bool == true {
-      sawTerminalFrame = true
-      terminalReason = object["done_reason"] as? String
-    }
-    if let chunk = object["response"] as? String, !chunk.isEmpty {
-      accumulated += chunk
-      let now = Date()
-      let firstUpdate = lastProgressLength == 0
-      let hasUsefulDelta = accumulated.count - lastProgressLength >= 2
-      if firstUpdate || (hasUsefulDelta && now.timeIntervalSince(lastProgressAt) >= 0.12) {
-        lastProgressAt = now
-        lastProgressLength = accumulated.count
-        onProgress(accumulated)
-      }
-    }
-  }
 }
 
 final class PassivePanel: NSPanel {
@@ -734,7 +569,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private var speechRateMenuItem: NSMenuItem?
   private var translationModeMenuItem: NSMenuItem?
-  private var localAIStatusMenuItem: NSMenuItem?
+  private var appleTranslationStatusMenuItem: NSMenuItem?
   private var shortcutModeMenuItem: NSMenuItem?
   private var englishAccentMenuItem: NSMenuItem?
   private var speechModeMenuItem: NSMenuItem?
@@ -782,13 +617,11 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private var neuralSpeechModeEnabled = false
   private var speechRate = 165
   private var translationMode: TranslationMode = .automatic
-  private var localAIAvailable = false
-  private var localAIStatusText = "检测中"
-  private var localAIWarmupRequested = false
+  private var appleTranslationStatusText = "检测中"
   private var translationCache: [String: TranslationOutput] = [:]
   private var translationCacheOrder: [String] = []
-  private var activeTranslationTask: URLSessionDataTask?
-  private var activeOllamaStream: OllamaStreamRequest?
+  private var activeOnlineTranslationTask: URLSessionDataTask?
+  private var activeAppleTranslationTask: Task<Void, Never>?
   private var translationGeneration = 0
   private var cachedEnglishVoices: [String: CachedSpeechVoice] = [:]
 
@@ -817,7 +650,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     prewarmSystemSpeech()
     NSApp.setActivationPolicy(.accessory)
     setupMenu()
-    refreshLocalAIStatus()
+    refreshAppleTranslationStatus()
     if !AXIsProcessTrusted() {
       log("Accessibility not trusted. Requesting permissions...")
       requestAccessibilityIfNeeded(prompt: true)
@@ -910,10 +743,10 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     translationModeMenuItem = translationItem
     menu.addItem(translationItem)
 
-    let aiStatusItem = NSMenuItem(title: localAIStatusTitle, action: #selector(refreshLocalAIStatus), keyEquivalent: "")
-    aiStatusItem.target = self
-    localAIStatusMenuItem = aiStatusItem
-    menu.addItem(aiStatusItem)
+    let appleStatusItem = NSMenuItem(title: appleTranslationStatusTitle, action: #selector(refreshAppleTranslationStatus), keyEquivalent: "")
+    appleStatusItem.target = self
+    appleTranslationStatusMenuItem = appleStatusItem
+    menu.addItem(appleStatusItem)
     menu.addItem(.separator())
 
     let modeItem = NSMenuItem(title: "仅快捷键 Option+Q（代码/笔试模式）", action: #selector(toggleShortcutMode), keyEquivalent: "")
@@ -958,7 +791,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
       item.state = (item.representedObject as? String) == mode.rawValue ? .on : .off
     }
     if mode != .fast {
-      refreshLocalAIStatus()
+      refreshAppleTranslationStatus()
     }
     log("selectTranslationMode: Translation mode is now \(mode.rawValue).")
   }
@@ -966,85 +799,38 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private var translationModeMenuTitle: String {
     switch translationMode {
     case .automatic: return "翻译模式：自动"
-    case .fast: return "翻译模式：极速"
-    case .ai: return "翻译模式：AI 精译"
+    case .fast: return "翻译模式：在线备用"
+    case .ai: return "翻译模式：Apple 本机"
     }
   }
 
-  private var localAIStatusTitle: String {
-    "本地 AI：\(localAIStatusText)（点此刷新）"
+  private var appleTranslationStatusTitle: String {
+    "Apple Translation：\(appleTranslationStatusText)（点此刷新）"
   }
 
-  @objc private func refreshLocalAIStatus() {
-    localAIStatusText = "检测中"
-    localAIStatusMenuItem?.title = localAIStatusTitle
-    guard let url = URL(string: "http://127.0.0.1:11434/api/tags") else { return }
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 2
-    URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-      var available = false
-      var status = "未启动，使用极速回退"
-
-      if error == nil,
-         let http = response as? HTTPURLResponse,
-         (200...299).contains(http.statusCode),
-         let data,
-         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-         let models = object["models"] as? [[String: Any]] {
-        let modelNames = models.compactMap { model in
-          (model["name"] as? String) ?? (model["model"] as? String)
-        }
-        available = modelNames.contains { name in
-          name == localAIModel || name.hasPrefix("\(localAIModel):")
-        }
-        status = available ? "TranslateGemma 12B 已就绪" : "服务已启动，模型未下载"
+  @objc private func refreshAppleTranslationStatus() {
+    appleTranslationStatusText = "检测中"
+    appleTranslationStatusMenuItem?.title = appleTranslationStatusTitle
+    Task { @MainActor [weak self] in
+      let source = Locale.Language(identifier: "en")
+      let target = Locale.Language(identifier: "zh-Hans")
+      let availability = await LanguageAvailability().status(from: source, to: target)
+      let status: String
+      switch availability {
+      case .installed:
+        status = "英→中语言包已安装"
+      case .supported:
+        status = "支持，但语言包未安装"
+      case .unsupported:
+        status = "当前语种不支持"
+      @unknown default:
+        status = "状态未知"
       }
-
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.localAIAvailable = available
-        self.localAIStatusText = available && self.localAIWarmupRequested
-          ? "TranslateGemma 12B 已就绪 · 常驻"
-          : status
-        self.localAIStatusMenuItem?.title = self.localAIStatusTitle
-        log("refreshLocalAIStatus: \(status)")
-        if available, self.translationMode != .fast {
-          self.warmUpLocalAIIfNeeded()
-        }
-      }
-    }.resume()
-  }
-
-  private func warmUpLocalAIIfNeeded() {
-    guard localAIAvailable, !localAIWarmupRequested else { return }
-    localAIWarmupRequested = true
-    localAIStatusText = "TranslateGemma 12B 预热中"
-    localAIStatusMenuItem?.title = localAIStatusTitle
-
-    guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else { return }
-    let payload: [String: Any] = [
-      "model": localAIModel,
-      "prompt": " ",
-      "stream": false,
-      "keep_alive": -1,
-      "options": ["num_predict": 1]
-    ]
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.timeoutInterval = 90
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-    URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
-      let succeeded = error == nil && ((response as? HTTPURLResponse).map { (200...299).contains($0.statusCode) } ?? false)
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.localAIWarmupRequested = succeeded
-        self.localAIStatusText = succeeded ? "TranslateGemma 12B 已就绪 · 常驻" : "TranslateGemma 12B 已就绪"
-        self.localAIStatusMenuItem?.title = self.localAIStatusTitle
-        log("warmUpLocalAIIfNeeded: \(succeeded ? "Model warm-up completed." : "Model warm-up failed; on-demand loading remains available.")")
-      }
-    }.resume()
+      guard let self else { return }
+      self.appleTranslationStatusText = status
+      self.appleTranslationStatusMenuItem?.title = self.appleTranslationStatusTitle
+      log("refreshAppleTranslationStatus: \(status)")
+    }
   }
 
   @objc private func toggleShortcutMode() {
@@ -1166,10 +952,10 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
 
   private func cancelTranslation() {
     translationGeneration += 1
-    activeTranslationTask?.cancel()
-    activeTranslationTask = nil
-    activeOllamaStream?.cancel()
-    activeOllamaStream = nil
+    activeOnlineTranslationTask?.cancel()
+    activeOnlineTranslationTask = nil
+    activeAppleTranslationTask?.cancel()
+    activeAppleTranslationTask = nil
   }
 
   private func removeCurrentSpeechAudio() {
@@ -1790,129 +1576,48 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     cancelTranslation()
     let requestGeneration = translationGeneration
     let engine = selectedTranslationEngine(for: text)
-    let loadingText = engine == .localAI ? "AI 精译中..." : "翻译中..."
-    let loadingSource = engine == .localAI ? "本机 TranslateGemma 12B" : "Google"
-    if engine == .localAI {
-      bubble.beginStreaming(text: loadingText, source: "\(loadingSource) · 系统 Siri Natural", at: point)
-    } else {
-      bubble.show(text: loadingText, source: "\(loadingSource) · 系统 Siri Natural", at: point)
-    }
-    log("activateSelection: Initiating \(engine == .localAI ? "local AI" : "Google") translation...")
+    let loadingSource = engine == .apple ? "Apple Translation · 本机" : "Google · 在线备用"
+    bubble.show(text: "翻译中...", source: "\(loadingSource) · 系统 Siri Natural", at: point)
+    log("activateSelection: Initiating \(engine == .apple ? "Apple on-device" : "Google") translation...")
 
     translate(
       text,
       sourceLanguageCode: languageCode,
       using: engine,
-      generation: requestGeneration,
-      progress: { [weak self] partial in
-        DispatchQueue.main.async {
-          guard let self, self.translationGeneration == requestGeneration else { return }
-          let visible = self.cleanTranslateGemmaResponse(partial)
-          guard !visible.isEmpty else { return }
-          self.bubble.updateStreaming(
-            text: visible,
-            source: "本机 TranslateGemma 12B · 生成中 · 系统 Siri Natural",
-            at: point
-          )
-        }
-      }
+      generation: requestGeneration
     ) { [weak self] result in
       DispatchQueue.main.async {
         guard let self, self.translationGeneration == requestGeneration else { return }
-        self.activeTranslationTask = nil
-        self.activeOllamaStream = nil
+        self.activeOnlineTranslationTask = nil
+        self.activeAppleTranslationTask = nil
         switch result {
         case .success(let output):
           log("Translation success via \(output.source). Length: \(output.text.count)")
-          let actualEngine: TranslationEngine = output.source.hasPrefix("本机 TranslateGemma") ? .localAI : .google
+          let actualEngine: TranslationEngine = output.source.hasPrefix("Apple Translation") ? .apple : .google
           self.storeCachedTranslation(output, engine: actualEngine, sourceLanguageCode: languageCode, text: text)
-          if actualEngine == .localAI {
-            self.bubble.finishStreaming(text: output.text, source: "\(output.source) · 系统 Siri Natural", at: point)
-          } else {
-            self.bubble.show(text: output.text, source: "\(output.source) · 系统 Siri Natural", at: point, autoHideAfter: 0, dismissOnMouseMove: false)
-          }
+          self.bubble.show(text: output.text, source: "\(output.source) · 系统 Siri Natural", at: point, autoHideAfter: 0, dismissOnMouseMove: false)
         case .failure(let error):
           let nsError = error as NSError
           log("Translation failed; domain: \(nsError.domain), code: \(nsError.code).")
-          if engine == .localAI {
-            self.bubble.finishStreaming(text: "翻译失败：\(error.localizedDescription)", source: loadingSource, at: point)
-          } else {
-            self.bubble.show(text: "翻译失败：\(error.localizedDescription)", source: loadingSource, at: point, autoHideAfter: 0, dismissOnMouseMove: false)
-          }
+          self.bubble.show(text: "翻译失败：\(error.localizedDescription)", source: loadingSource, at: point, autoHideAfter: 0, dismissOnMouseMove: false)
         }
       }
     }
   }
 
-  private func selectedTranslationEngine(for text: String) -> TranslationEngine {
+  private func selectedTranslationEngine(for _: String) -> TranslationEngine {
     switch translationMode {
     case .fast:
       return .google
     case .ai:
-      return .localAI
+      return .apple
     case .automatic:
-      return shouldUseLocalAI(for: text) ? .localAI : .google
+      return .apple
     }
-  }
-
-  private func shouldUseLocalAI(for text: String) -> Bool {
-    let normalized = text
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    let words = normalized.split(whereSeparator: { $0.isWhitespace })
-    guard !words.isEmpty else { return false }
-
-    // CamelCase / PascalCase product and API names benefit from contextual AI
-    // translation even when the selection is short.
-    let technicalTokens = words.filter { rawToken in
-      let token = String(rawToken).trimmingCharacters(in: .punctuationCharacters)
-      return token.count >= 7 &&
-        token.range(of: "^[A-Z][A-Za-z0-9+.-]*[A-Z][A-Za-z0-9+.-]*$", options: .regularExpression) != nil
-    }
-    if !technicalTokens.isEmpty { return true }
-
-    // Keep routing local and deterministic. Asking another model to classify
-    // the text would add latency before translation even starts.
-    var complexityScore = 0
-    let sentenceWordCounts = normalized
-      .split(whereSeparator: { ".!?;\n".contains($0) })
-      .map { sentence in sentence.split(whereSeparator: { $0.isWhitespace }).count }
-      .filter { $0 > 0 }
-    let longestSentence = sentenceWordCounts.max() ?? words.count
-    let averageSentenceLength = sentenceWordCounts.isEmpty
-      ? Double(words.count)
-      : Double(sentenceWordCounts.reduce(0, +)) / Double(sentenceWordCounts.count)
-
-    let clausePattern = "\\b(although|whereas|notwithstanding|unless|because|despite|while|which|whose|whereby|therefore|however|moreover|consequently|insofar)\\b"
-    let clauseCount = (try? NSRegularExpression(pattern: clausePattern, options: [.caseInsensitive]))?
-      .numberOfMatches(in: normalized, range: NSRange(normalized.startIndex..., in: normalized)) ?? 0
-    if clauseCount >= 2 { complexityScore += 1 }
-
-    let structuralPunctuationCount = normalized.unicodeScalars.reduce(into: 0) { count, scalar in
-      if CharacterSet(charactersIn: ",:()[]—").contains(scalar) { count += 1 }
-    }
-    if structuralPunctuationCount >= 3 { complexityScore += 1 }
-
-    let cleanedWordLengths = words.map {
-      String($0).trimmingCharacters(in: .punctuationCharacters).count
-    }.filter { $0 > 0 }
-    let longWordCount = cleanedWordLengths.filter { $0 >= 12 }.count
-    let averageWordLength = cleanedWordLengths.isEmpty
-      ? 0
-      : Double(cleanedWordLengths.reduce(0, +)) / Double(cleanedWordLengths.count)
-    if averageWordLength >= 3.5, longestSentence >= 30 { complexityScore += 2 }
-    if averageWordLength >= 3.5, averageSentenceLength >= 22 { complexityScore += 1 }
-    if longWordCount >= 2 { complexityScore += 1 }
-    if words.count >= 20, averageWordLength >= 6.3 { complexityScore += 1 }
-
-    if words.count >= 100 { complexityScore += 2 }
-    if text.count >= 900 { complexityScore += 2 }
-
-    return complexityScore >= 3
   }
 
   private func translationCacheKey(engine: TranslationEngine, sourceLanguageCode: String, text: String) -> String {
-    let engineName = engine == .localAI ? "ai" : "google"
+    let engineName = engine == .apple ? "apple" : "google"
     return "\(engineName)|\(sourceLanguageCode)|zh|\(text)"
   }
 
@@ -1937,76 +1642,44 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     sourceLanguageCode: String,
     using engine: TranslationEngine,
     generation: Int,
-    progress: @escaping (String) -> Void,
     completion: @escaping (Result<TranslationOutput, Error>) -> Void
   ) {
     let allowsOnlineFallback = translationMode != .ai
     if let cached = cachedTranslation(engine: engine, sourceLanguageCode: sourceLanguageCode, text: text) {
-      log("translate: Returning cached \(engine == .localAI ? "AI" : "Google") result.")
+      log("translate: Returning cached \(engine == .apple ? "Apple" : "Google") result.")
       completion(.success(cached))
       return
     }
 
     switch engine {
     case .google:
-      activeTranslationTask = translateWithGoogle(text) { result in
+      activeOnlineTranslationTask = translateWithGoogle(text) { result in
         completion(result.map { TranslationOutput(text: $0, source: "Google") })
       }
-    case .localAI:
-      guard localAIAvailable else {
-        if !allowsOnlineFallback {
-          completion(.failure(NSError(
-            domain: "TranslateGemma",
-            code: -10,
-            userInfo: [NSLocalizedDescriptionKey: "本地 AI 未就绪；AI 精译模式不会把文本发送到在线服务"]
-          )))
-          return
-        }
-        log("translate: Local AI is not ready; falling back to Google without waiting.")
-        activeTranslationTask = translateWithGoogle(text) { result in
-          completion(result.map { TranslationOutput(text: $0, source: "Google · AI 未就绪回退") })
-        }
-        return
-      }
-
-      var hasEmittedAIProgress = false
-      activeTranslationTask = translateWithOllama(
+    case .apple:
+      activeAppleTranslationTask = translateWithApple(
         text,
-        sourceLanguageCode: sourceLanguageCode,
-        onProgress: { partial in
-          if !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            hasEmittedAIProgress = true
-          }
-          progress(partial)
-        }
+        sourceLanguageCode: sourceLanguageCode
       ) { [weak self] result in
-        DispatchQueue.main.async {
-          guard let self, self.translationGeneration == generation else { return }
-          switch result {
-          case .success(let translated):
-            completion(.success(TranslationOutput(text: translated, source: "本机 TranslateGemma 12B")))
-          case .failure(let aiError):
-            if (aiError as? URLError)?.code == .cancelled {
-              completion(.failure(aiError))
-              return
-            }
-            if hasEmittedAIProgress {
-              log("translate: Local AI failed after streaming began; preserving the AI result instead of switching engines.")
-              self.refreshLocalAIStatus()
-              completion(.failure(aiError))
-              return
-            }
-            if !allowsOnlineFallback {
-              completion(.failure(aiError))
-              return
-            }
-            log("translate: Local AI failed before the first streamed token; falling back to Google.")
-            self.refreshLocalAIStatus()
-            self.activeTranslationTask = self.translateWithGoogle(text) { googleResult in
-              completion(googleResult.map {
-                TranslationOutput(text: $0, source: "Google · AI 失败回退")
-              })
-            }
+        guard let self, self.translationGeneration == generation else { return }
+        switch result {
+        case .success(let translated):
+          completion(.success(TranslationOutput(text: translated, source: "Apple Translation · 本机")))
+        case .failure(let appleError):
+          if (appleError as? CancellationError) != nil {
+            completion(.failure(appleError))
+            return
+          }
+          self.refreshAppleTranslationStatus()
+          guard allowsOnlineFallback else {
+            completion(.failure(appleError))
+            return
+          }
+          log("translate: Apple Translation failed; using the explicit Google fallback path.")
+          self.activeOnlineTranslationTask = self.translateWithGoogle(text) { googleResult in
+            completion(googleResult.map {
+              TranslationOutput(text: $0, source: "Google · Apple 不可用回退")
+            })
           }
         }
       }
@@ -2148,18 +1821,13 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     defer { translationMode = originalMode }
 
     var failed = false
-    let simpleLongText = String(repeating: "We read books and share notes every day. ", count: 10)
-    let complexShortText = "Although the proposed method appears efficient, its assumptions, which depend on independently distributed observations, become difficult to defend because the sampling process changes over time and therefore introduces a systematic bias into the final estimate."
     let checks: [(TranslationMode, String, TranslationEngine)] = [
-      (.automatic, "hello world", .google),
-      (.automatic, String(repeating: "a ", count: 159), .google),
-      (.automatic, simpleLongText, .google),
-      (.automatic, complexShortText, .localAI),
-      (.automatic, "OpenTelemetry", .localAI),
-      (.automatic, "OpenTelemetry correlates traces, metrics, and logs across distributed services.", .localAI),
-      (.automatic, String(repeating: "A short sentence. ", count: 60), .localAI),
+      (.automatic, "hello world", .apple),
+      (.automatic, "OpenTelemetry", .apple),
+      (.automatic, String(repeating: "A long paper sentence. ", count: 60), .apple),
       (.fast, "OpenTelemetry", .google),
-      (.ai, "hello world", .localAI)
+      (.ai, "hello world", .apple),
+      (.ai, "OpenTelemetry", .apple)
     ]
 
     for (mode, text, expected) in checks {
@@ -2174,79 +1842,44 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     return !failed
   }
 
-  func runLocalAIIntegrationSelfTest() -> Bool {
+  func runAppleTranslationIntegrationSelfTest() -> Bool {
     let cases = [
-      "OpenTelemetry",
-      "In a distributed system, traces, metrics, and logs must be correlated so engineers can identify latency regressions without guessing which service caused them."
+      ("term", "OpenTelemetry"),
+      ("sentence", "In a distributed system, traces, metrics, and logs must be correlated so engineers can identify latency regressions without guessing which service caused them."),
+      ("paper", String(repeating: "Although the proposed method improves average throughput, its assumptions must be evaluated under distribution shift, because changes in sampling, instrumentation, and workload composition can introduce systematic bias into the final estimate. ", count: 12))
     ]
     var allPassed = true
 
-    for text in cases {
+    for (label, text) in cases {
       let semaphore = DispatchSemaphore(value: 0)
       var passed = false
       var detail = ""
-      var progressCount = 0
-      var firstProgressLatency: TimeInterval?
       let startedAt = Date()
-      _ = translateWithOllama(
+      _ = translateWithApple(
         text,
-        sourceLanguageCode: "en",
-        onProgress: { partial in
-          guard !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-          progressCount += 1
-          if firstProgressLatency == nil {
-            firstProgressLatency = Date().timeIntervalSince(startedAt)
-          }
-        }
+        sourceLanguageCode: "en"
       ) { result in
         switch result {
         case .success(let translated):
-          passed = translated.range(of: "[\\u4e00-\\u9fa5]", options: .regularExpression) != nil && progressCount > 0
-          let firstLatency = firstProgressLatency.map { String(format: "%.2fs", $0) } ?? "none"
-          detail = "progress=\(progressCount) first=\(firstLatency) final=\(translated)"
+          passed = translated.range(of: "[\\u4e00-\\u9fa5]", options: .regularExpression) != nil
+          detail = "case=\(label) chars=\(text.count) latency=\(String(format: "%.2fs", Date().timeIntervalSince(startedAt))) final=\(translated.prefix(120))"
         case .failure(let error):
           detail = error.localizedDescription
         }
         semaphore.signal()
       }
 
-      if semaphore.wait(timeout: .now() + 90) == .timedOut {
-        print("AI_SELF_TEST=FAIL timeout")
+      let deadline = Date().addingTimeInterval(20)
+      while semaphore.wait(timeout: .now()) == .timedOut, Date() < deadline {
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+      }
+      if !passed && detail.isEmpty {
+        print("APPLE_TRANSLATION_SELF_TEST=FAIL timeout")
         return false
       }
-      print(passed ? "AI_SELF_TEST=PASS \(detail)" : "AI_SELF_TEST=FAIL \(detail)")
+      print(passed ? "APPLE_TRANSLATION_SELF_TEST=PASS \(detail)" : "APPLE_TRANSLATION_SELF_TEST=FAIL \(detail)")
       allPassed = allPassed && passed
     }
-
-    let terminalSemaphore = DispatchSemaphore(value: 0)
-    var rejectedTruncatedOutput = false
-    var terminalDetail = ""
-    _ = translateWithOllama(
-      "This deliberately long sentence must not be accepted as a complete translation when the model output limit is only four tokens.",
-      sourceLanguageCode: "en",
-      onProgress: { _ in },
-      numPredict: 4
-    ) { result in
-      switch result {
-      case .success(let translated):
-        terminalDetail = "unexpected success: \(translated)"
-      case .failure(let error):
-        let nsError = error as NSError
-        rejectedTruncatedOutput = nsError.domain == "TranslateGemma" &&
-          nsError.code == -9 &&
-          error.localizedDescription.contains("长度上限")
-        terminalDetail = error.localizedDescription
-      }
-      terminalSemaphore.signal()
-    }
-    if terminalSemaphore.wait(timeout: .now() + 45) == .timedOut {
-      print("AI_TERMINAL_SELF_TEST=FAIL timeout")
-      return false
-    }
-    print(rejectedTruncatedOutput
-      ? "AI_TERMINAL_SELF_TEST=PASS \(terminalDetail)"
-      : "AI_TERMINAL_SELF_TEST=FAIL \(terminalDetail)")
-    allPassed = allPassed && rejectedTruncatedOutput
     return allPassed
   }
 
@@ -2524,88 +2157,53 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     speaker.speak(utterance)
   }
 
-  private func languageName(for code: String) -> String {
-    let normalized = code.lowercased().split(separator: "-").first.map(String.init) ?? code.lowercased()
-    let names = [
-      "en": "English", "fr": "French", "de": "German", "es": "Spanish",
-      "it": "Italian", "pt": "Portuguese", "ja": "Japanese", "ko": "Korean",
-      "ru": "Russian", "nl": "Dutch", "sv": "Swedish", "da": "Danish",
-      "no": "Norwegian", "fi": "Finnish", "pl": "Polish", "tr": "Turkish",
-      "uk": "Ukrainian", "ar": "Arabic", "hi": "Hindi", "vi": "Vietnamese"
-    ]
-    return names[normalized] ?? "the source language"
-  }
-
-  private func translateGemmaPrompt(_ text: String, sourceLanguageCode: String) -> String {
-    let sourceCode = sourceLanguageCode.lowercased().hasPrefix("en") ? "en" : sourceLanguageCode
-    let sourceName = languageName(for: sourceCode)
-    let technicalTermInstruction: String
-    if shouldUseLocalAI(for: text), !text.contains(" ") {
-      technicalTermInstruction = " If the source is a technical proper name without a direct Chinese equivalent, preserve the original name and add a concise Chinese meaning in parentheses."
-    } else {
-      technicalTermInstruction = ""
-    }
-
-    return """
-    Translate \(sourceName) (\(sourceCode)) into natural Simplified Chinese (zh-CN). Preserve meaning, tone, and terminology.\(technicalTermInstruction) Output only the translation.
-
-    \(text)
-    """
-  }
-
-  private func cleanTranslateGemmaResponse(_ response: String) -> String {
-    var cleaned = response
-    for token in ["<end_of_turn>", "<eos>", "<bos>", "<pad>", "</s>", "<s>"] {
-      cleaned = cleaned.replacingOccurrences(of: token, with: "")
-    }
-    return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
   @discardableResult
-  private func translateWithOllama(
+  private func translateWithApple(
     _ text: String,
     sourceLanguageCode: String,
-    onProgress: @escaping (String) -> Void = { _ in },
-    numPredict: Int? = nil,
     completion: @escaping (Result<String, Error>) -> Void
-  ) -> URLSessionDataTask? {
-    guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
-      completion(.failure(NSError(domain: "TranslateGemma", code: -1, userInfo: [NSLocalizedDescriptionKey: "本地 AI 地址无效"])))
-      return nil
-    }
-
-    let payload: [String: Any] = [
-      "model": localAIModel,
-      "prompt": translateGemmaPrompt(text, sourceLanguageCode: sourceLanguageCode),
-      "stream": true,
-      "keep_alive": -1,
-      "options": [
-        "temperature": 0.1,
-        "num_predict": numPredict ?? min(4096, max(256, text.count * 3))
-      ]
-    ]
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.timeoutInterval = 180
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    do {
-      request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-    } catch {
-      completion(.failure(error))
-      return nil
-    }
-
-    let stream = OllamaStreamRequest(onProgress: onProgress) { [weak self] result in
-      guard let self else {
-        completion(.failure(NSError(domain: "TranslateGemma", code: -6, userInfo: [NSLocalizedDescriptionKey: "AI 请求已结束"])))
-        return
+  ) -> Task<Void, Never> {
+    Task.detached(priority: .userInitiated) {
+      do {
+        try Task.checkCancellation()
+        let sourceIdentifier = sourceLanguageCode.lowercased().hasPrefix("en") ? "en" : sourceLanguageCode
+        let source = Locale.Language(identifier: sourceIdentifier)
+        let target = Locale.Language(identifier: "zh-Hans")
+        let status = await LanguageAvailability().status(from: source, to: target)
+        guard status == .installed else {
+          let message = status == .supported
+            ? "Apple Translation 语言包尚未安装"
+            : "Apple Translation 不支持当前语种"
+          throw NSError(
+            domain: "AppleTranslation",
+            code: status == .supported ? -2 : -3,
+            userInfo: [NSLocalizedDescriptionKey: message]
+          )
+        }
+        try Task.checkCancellation()
+        let session = TranslationSession(installedSource: source, target: target)
+        guard await session.isReady else {
+          throw NSError(
+            domain: "AppleTranslation",
+            code: -4,
+            userInfo: [NSLocalizedDescriptionKey: "Apple Translation 语言包暂未就绪"]
+          )
+        }
+        let response = try await session.translate(text)
+        try Task.checkCancellation()
+        let translated = response.targetText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !translated.isEmpty else {
+          throw NSError(
+            domain: "AppleTranslation",
+            code: -5,
+            userInfo: [NSLocalizedDescriptionKey: "Apple Translation 返回了空译文"]
+          )
+        }
+        completion(.success(translated))
+      } catch {
+        completion(.failure(error))
       }
-      completion(result.map(self.cleanTranslateGemmaResponse))
     }
-    activeOllamaStream = stream
-    let task = stream.start(request: request)
-    return task
   }
 
   @discardableResult
@@ -2633,7 +2231,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     request.timeoutInterval = 15
     request.httpBody = body
     request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
-    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.2"
+    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.3"
     request.setValue("Huayi/\(appVersion) (macOS)", forHTTPHeaderField: "User-Agent")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -2727,7 +2325,7 @@ if CommandLine.arguments.contains("--clipboard-self-test") {
   exit(TranslatorApp().runTranslationRoutingSelfTest() ? 0 : 1)
 } else if CommandLine.arguments.contains("--ai-self-test") {
   let testApp = TranslatorApp()
-  exit(testApp.runLocalAIIntegrationSelfTest() ? 0 : 1)
+  exit(testApp.runAppleTranslationIntegrationSelfTest() ? 0 : 1)
 } else {
   let app = NSApplication.shared
   let delegate = TranslatorApp()

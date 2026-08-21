@@ -9,7 +9,7 @@
   <p>
     <a href="https://github.com/Rhiks/huayi-macos/actions/workflows/ci.yml"><img src="https://github.com/Rhiks/huayi-macos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2563EB.svg" alt="MIT License"></a>
-    <img src="https://img.shields.io/badge/macOS-13%2B-111827?logo=apple" alt="macOS 13+">
+    <img src="https://img.shields.io/badge/macOS-26%2B-111827?logo=apple" alt="macOS 26+">
     <img src="https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white" alt="Swift 5.9+">
     <a href="https://github.com/Rhiks/huayi-macos/stargazers"><img src="https://img.shields.io/github/stars/Rhiks/huayi-macos?style=flat&logo=github&color=7C3AED" alt="GitHub Stars"></a>
   </p>
@@ -17,7 +17,7 @@
   <p>
     <a href="#-快速安装"><strong>快速安装</strong></a>
     · <a href="#-三种翻译模式">翻译模式</a>
-    · <a href="#-启用本机-translategemma-12b">本机 AI</a>
+    · <a href="#-apple-translation">Apple Translation</a>
     · <a href="#-隐私与数据路径">隐私说明</a>
     · <a href="docs/PROMOTION.md">宣传素材</a>
   </p>
@@ -25,7 +25,7 @@
 
 ---
 
-选中文字后，鼠标附近只出现一个 **18×18** 的小触点。需要译文时悬停展开，不需要时尽量少挡正文。短词短句快速返回；论文术语、复杂句和长段落可以交给本机 **TranslateGemma 12B** 流式处理。
+选中文字后，鼠标附近只出现一个 **18×18** 的小触点。需要译文时悬停展开，不需要时尽量少挡正文。单词、论文术语、复杂句和长段落默认交给 macOS **Apple Translation** 本机处理。
 
 <p align="center">
   <kbd>划选文字</kbd>
@@ -55,8 +55,8 @@
       <p>先显示小触点，悬停才展开译文。查完继续读，不必复制、切换应用、粘贴再返回。</p>
     </td>
     <td width="50%" valign="top">
-      <h3>🧠 本机长文 AI</h3>
-      <p>TranslateGemma 12B 通过本机 Ollama 流式翻译，适合论文术语、复杂句和技术长文。</p>
+      <h3>🍎 Apple 本机翻译</h3>
+      <p>直接使用 macOS Translation 框架和系统语言包，不需要 Ollama，不常驻 12B，也不用等待大模型冷启动。</p>
     </td>
   </tr>
   <tr>
@@ -66,7 +66,7 @@
     </td>
     <td width="50%" valign="top">
       <h3>🔐 数据路径透明</h3>
-      <p>AI 精译只访问本机 Ollama，不静默在线回退。在线翻译与语音会发送到哪里，也都明确写出。</p>
+      <p>默认翻译由 Apple Translation 在本机完成；Google 只作为自动失败回退或手动选择的在线备用。</p>
     </td>
   </tr>
 </table>
@@ -75,13 +75,13 @@
 
 | 学英语 | 读 Paper | 看技术资料 |
 | :---: | :---: | :---: |
-| 随手查词、理解短句，再用系统语音听发音。 | 翻译术语、复杂句和长段落，流式结果支持滚动回看。 | 在浏览器、PDF 阅读器和代码编辑器中理解文档、注释与报错。 |
+| 随手查词、理解短句，再用系统语音听发音。 | 翻译术语、复杂句和长段落，长文结果支持滚动回看。 | 在浏览器、PDF 阅读器和代码编辑器中理解文档、注释与报错。 |
 
 ### 阅读体验里的小细节
 
-- **自动、极速、AI 精译**三种模式，短内容和长内容各走合适的路径。
-- 自动识别长文及 `OpenTelemetry` 一类驼峰技术专名，优先交给本机 AI。
-- 长文面板支持滚动；回看前文时，流式结果不会强行把视图拉回底部。
+- **自动、在线备用、Apple 本机**三种模式，默认始终优先系统本机翻译。
+- 不加载 TranslateGemma 12B；`OpenTelemetry` 一类技术词和长段落使用同一条低延迟系统链路。
+- 长文面板支持滚动，译文会一直保留到主动点击外部区域。
 - 使用 macOS 系统 Siri Natural 语音本机朗读，也可选 Microsoft Neural 在线语音。
 - 临时读取剪贴板后安全恢复，不覆盖其间由用户或其他应用写入的新内容。
 - 发布构建无分析遥测，也不会记录选中文本。
@@ -90,13 +90,13 @@
 
 ### 系统要求
 
-- macOS 13 Ventura 或更高版本。
+- macOS 26 或更高版本。
 - Swift 5.9+ 与 Xcode Command Line Tools。
-- 基础在线翻译不需要额外运行时。
-- 本机 AI 推荐 Apple Silicon；TranslateGemma 12B 约占 8 GB 磁盘，并需要数 GB 统一内存。
+- Apple Translation 英→简中语言包（本机已安装即可直接使用）。
+- 不需要 Ollama、模型权重或额外后台服务。
 
 > [!NOTE]
-> 项目主要在 Apple Silicon 上测试。Intel Mac 可以从源码尝试构建，但本机 12B 模型的速度和内存占用尚未作为支持目标验证。
+> 当前版本按作者自己的 macOS 26 设备优化，直接使用系统 Translation 框架。
 
 ### 下载预编译 Preview
 
@@ -128,29 +128,18 @@ chmod +x install.sh uninstall.sh script/build_and_run.sh
 
 | 模式 | 数据路径 | 更适合 |
 | :---: | --- | --- |
-| **自动** | 短文本走 Google；长文和部分技术专名优先走本机 Ollama；本机 AI 不可用时可在线回退 | 日常阅读，无需反复切换 |
-| **极速** | 文本通过 HTTPS POST 发往 Google 的非公开翻译端点 | 单词、短句、低延迟查译 |
-| **AI 精译** | 只访问 `127.0.0.1:11434`，不在线回退 | 敏感文本、长文、技术语境 |
+| **自动** | 优先 Apple Translation 本机处理；系统语言包不可用时回退 Google | 日常阅读，无需反复切换 |
+| **在线备用** | 文本通过 HTTPS POST 发往 Google 的非公开翻译端点 | 手动排查或比较译文 |
+| **Apple 本机** | 只使用 macOS Translation 框架，不在线回退 | 敏感文本、长文、技术语境 |
 
-自动模式不再只看固定字符阈值。Huayi 会在本机快速计算句长、从句连接词、结构标点、长词密度和技术专名等特征：简单但较长的日常文本仍可走极速路径，较短但语法复杂的长难句会优先走本机 AI。`OpenTelemetry` 一类驼峰技术专名仍会直接路由到本机 AI；这个判断过程不请求额外模型或网络服务。
-
-> [!NOTE]
-> 本机 12B 即使已在后台预热并保持常驻，首字生成仍受设备性能、系统负载和输入长度影响，可能需要数秒。Huayi 用极速路径处理简单短文本来保持即时感，但不会承诺本机 AI 零等待。
+自动模式不再按字符数或语义复杂度分流。Apple Translation 足够轻量，短词和长文都直接走同一条本机路径；只有系统翻译失败时，自动模式才使用 Google 备用。
 
 > [!WARNING]
 > Google 路径使用未文档化端点，可能随时变化，也不代表 Google 官方 SDK 或可用性承诺。
 
-## 🧠 启用本机 TranslateGemma 12B
+## 🍎 Apple Translation
 
-本机 AI 是可选能力。基础在线翻译不依赖 Ollama，也不要求下载模型。
-
-~~~bash
-brew install ollama
-brew services start ollama
-ollama pull translategemma:12b
-~~~
-
-Huayi 会在菜单栏显示模型状态，并在 **自动** 或 **AI 精译** 模式下预热模型。模型权重不包含在本仓库中，使用时需遵守 [Gemma Terms](https://ai.google.dev/gemma/terms)。
+Huayi 直接调用 macOS 26 的 Translation 框架。菜单栏会显示英→简中语言包状态；语言包安装后，翻译完全由系统在本机完成。它由 macOS 管理资源回收，不需要 Huayi 常驻一个独立大模型进程。
 
 ## 🔊 语音
 
@@ -170,8 +159,8 @@ Huayi 不包含分析 SDK。发布构建默认不写行为日志，选中文本�
 
 | 功能 | 文本会去哪里 |
 | --- | --- |
-| 极速，以及自动模式的部分请求 | Google |
-| AI 精译 | 本机 Ollama（`127.0.0.1:11434`） |
+| 自动、Apple 本机 | Apple Translation；仅自动模式失败时可能回退 Google |
+| 在线备用 | Google |
 | 可选 Neural 语音 | Microsoft |
 | 系统语音 | 英语使用本机 `/usr/bin/say`，其他语言使用 `AVSpeechSynthesizer` |
 
@@ -204,7 +193,7 @@ BIN="$(swift build -c release --show-bin-path)/Huayi"
 "$BIN" --clipboard-self-test
 ~~~
 
-本机已安装 Ollama 和模型时，可运行真实流式集成测试：
+运行 Apple Translation 真实集成测试：
 
 ~~~bash
 "$BIN" --ai-self-test
@@ -218,7 +207,7 @@ BIN="$(swift build -c release --show-bin-path)/Huayi"
 ./uninstall.sh
 ~~~
 
-卸载脚本会把应用移动到废纸篓，不会删除 Ollama 模型或 macOS 权限记录。
+卸载脚本会把应用移动到废纸篓，不会删除 macOS 系统语言包或权限记录。
 
 ## 🤝 参与贡献
 
@@ -243,6 +232,6 @@ BIN="$(swift build -c release --show-bin-path)/Huayi"
 
 ## ⚖️ 第三方与许可证
 
-Huayi 源码以 [MIT License](LICENSE) 开源。Ollama、TranslateGemma、Gemma 权重和 edge-tts 是未捆绑的第三方组件，各自适用独立条款；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Huayi 源码以 [MIT License](LICENSE) 开源。Apple 系统框架、Google 在线备用和可选的 edge-tts 各自适用独立条款；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-本项目与 Apple、Google、Microsoft、Ollama 均无隶属、赞助或背书关系。
+本项目与 Apple、Google、Microsoft 均无隶属、赞助或背书关系。
