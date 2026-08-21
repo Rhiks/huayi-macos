@@ -1,26 +1,37 @@
 <div align="center">
-  <img src="Assets/HuayiIcon-1024.png" width="128" height="128" alt="Huayi icon">
-  <h1>Huayi 划译</h1>
-  <p>原生 macOS 划词翻译：轻量悬浮触点、本机 TranslateGemma 12B 流式精译、快速在线翻译与系统语音朗读。</p>
+  <img src="docs/assets/huayi-social-preview.png" width="100%" alt="Huayi 划译：原生 macOS 划词翻译">
+  <br><br>
   <p>
     <a href="https://github.com/Rhiks/huayi-macos/actions/workflows/ci.yml"><img src="https://github.com/Rhiks/huayi-macos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
     <img src="https://img.shields.io/badge/macOS-13%2B-black" alt="macOS 13+">
     <img src="https://img.shields.io/badge/Swift-5.9%2B-orange" alt="Swift 5.9+">
+    <a href="https://github.com/Rhiks/huayi-macos/stargazers"><img src="https://img.shields.io/github/stars/Rhiks/huayi-macos?style=flat&logo=github" alt="GitHub Stars"></a>
+  </p>
+  <p>
+    <a href="#快速安装">快速安装</a> ·
+    <a href="#翻译模式">翻译模式</a> ·
+    <a href="#启用本地-translategemma-12b">本地 AI</a> ·
+    <a href="#隐私">隐私</a> ·
+    <a href="docs/PROMOTION.md">宣传素材</a>
   </p>
 </div>
 
-Huayi 是一个 Swift + AppKit 菜单栏应用。划选文字后，它在鼠标附近显示一个 18×18 的触点；悬停即可展开译文。结果面板不会主动抢占键盘焦点，长文支持本机 AI 流式生成和滚动阅读。
+**Huayi** 是一个 Swift + AppKit 菜单栏应用。划选文字后，鼠标附近只出现一个 18×18 的小触点；需要译文时悬停展开，不需要时尽量少挡正文。短句可以快速翻译，长文和技术术语可以交给本机 TranslateGemma 12B 流式处理。
 
 > 当前是 source-first 预览版：请从源码在本机构建。仓库暂不分发未公证的通用安装包。
 
-## 亮点
+## 为什么是 Huayi
 
-- 原生 AppKit，无 Electron。
-- 轻量触点触发，减少划词后遮挡正文。
+| 少打断 | 本机 12B 精译 | 原生体验 |
+| --- | --- | --- |
+| 划选后先显示 18×18 触点，悬停才展开译文，减少对正文的遮挡。 | TranslateGemma 12B 通过 Ollama 流式输出，长文、驼峰词和技术语境优先处理。 | Swift + AppKit 编写，无 Electron；译文面板不主动抢占键盘焦点。 |
+
+### 细节也不含糊
+
 - **自动**、**极速**、**AI 精译**三种模式。
-- TranslateGemma 12B 通过本机 Ollama 流式输出；技术术语和长文优先走 AI。
-- 明确选择 **AI 精译** 时不会静默把文本回退到在线服务。
+- 明确选择 **AI 精译** 时，正文只发给本机 Ollama，不静默回退到在线服务。
+- 长文面板支持滚动；用户回看前文时，流式结果不会强行把视图拉回底部。
 - 系统 Siri Natural 语音本机朗读；可选 Microsoft Neural 在线语音。
 - Option+Q 快捷模式，适合代码编辑器等容易误触的界面。
 - 临时读取剪贴板后安全恢复；不会覆盖其间由用户或其他应用写入的新内容。
