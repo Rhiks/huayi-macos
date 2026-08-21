@@ -1,0 +1,13 @@
+.DS_Store
+.codex/
+.build/
+build/
+dist/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+*.log
+.env
+.env.*
+*.pem
+*.key
