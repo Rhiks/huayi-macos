@@ -766,6 +766,8 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private let neuralSpeechModeKey = "Huayi.neuralSpeechModeEnabled_v1"
   private let speechRatePreferenceName = "Huayi.speechRate_v1"
   private let translationModeKey = "Huayi.translationMode_v1"
+  private let legacyPreferencesMigrationKey = "Huayi.didMigrateComMskPreferences_v1"
+  private let legacyPreferencesDomain = "com.msk.huayi"
   private let speechRateOptions: [(rate: Int, label: String)] = [
     (110, "很慢"),
     (130, "慢"),
@@ -777,7 +779,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private var shortcutModeEnabled = false
   private var englishAccent = "en-US"
   private var neuralSpeechModeEnabled = false
-  private var speechRate = 145
+  private var speechRate = 165
   private var translationMode: TranslationMode = .automatic
   private var localAIAvailable = false
   private var localAIStatusText = "检测中"
@@ -797,11 +799,12 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     }
     log("applicationDidFinishLaunching called. Trusted: \(AXIsProcessTrusted())")
     cleanupSpeechFilesLeftByPreviousRuns()
+    migrateLegacyPreferencesIfNeeded()
     shortcutModeEnabled = UserDefaults.standard.object(forKey: shortcutModeKey) as? Bool ?? false
     englishAccent = UserDefaults.standard.string(forKey: englishAccentKey) == "en-GB" ? "en-GB" : "en-US"
     neuralSpeechModeEnabled = UserDefaults.standard.bool(forKey: neuralSpeechModeKey)
     let storedSpeechRate = UserDefaults.standard.integer(forKey: speechRatePreferenceName)
-    speechRate = speechRateOptions.contains(where: { $0.rate == storedSpeechRate }) ? storedSpeechRate : 145
+    speechRate = speechRateOptions.contains(where: { $0.rate == storedSpeechRate }) ? storedSpeechRate : 165
     translationMode = UserDefaults.standard.string(forKey: translationModeKey)
       .flatMap(TranslationMode.init(rawValue:)) ?? .automatic
     log("applicationDidFinishLaunching: Loaded shortcutModeEnabled = \(shortcutModeEnabled)")
@@ -822,6 +825,27 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     startEventTapHealthMonitor()
 
     log("Huayi ready: hover trigger mode with Option+Q fallback; translation mode \(translationMode.rawValue).")
+  }
+
+  private func migrateLegacyPreferencesIfNeeded() {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: legacyPreferencesMigrationKey) else { return }
+    defer { defaults.set(true, forKey: legacyPreferencesMigrationKey) }
+    guard let legacy = UserDefaults.standard.persistentDomain(forName: legacyPreferencesDomain) else { return }
+
+    let keys = [
+      shortcutModeKey,
+      englishAccentKey,
+      neuralSpeechModeKey,
+      speechRatePreferenceName,
+      translationModeKey
+    ]
+    for key in keys where defaults.object(forKey: key) == nil {
+      if let value = legacy[key] {
+        defaults.set(value, forKey: key)
+      }
+    }
+    log("migrateLegacyPreferencesIfNeeded: Imported available preferences from \(legacyPreferencesDomain).")
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -2429,9 +2453,9 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
       } else {
         log("startSystemSpeech: No matching downloaded voice for \(targetLocale); using the configured system voice.")
       }
-      process.arguments = arguments
-      let inputPipe = Pipe()
-      process.standardInput = inputPipe
+      // Passing the text directly avoids creating, writing, and closing a pipe
+      // before `say` can begin parsing the utterance.
+      process.arguments = arguments + ["--", text]
       currentSpeechProcess = process
       process.terminationHandler = { [weak self] _ in
         DispatchQueue.main.async {
@@ -2441,16 +2465,11 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
       }
       do {
         try process.run()
-        if let data = text.data(using: .utf8) {
-          try inputPipe.fileHandleForWriting.write(contentsOf: data)
-        }
-        try inputPipe.fileHandleForWriting.close()
         log("startSystemSpeech: say process launched at rate \(speechRate).")
       } catch {
         if process.isRunning {
           process.terminate()
         }
-        try? inputPipe.fileHandleForWriting.close()
         currentSpeechProcess = nil
         log("startSystemSpeech: Failed to run say process: \(error.localizedDescription)")
       }
@@ -2486,7 +2505,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     utterance.rate = 0.47
     utterance.pitchMultiplier = 1.0
     utterance.volume = 1.0
-    utterance.preUtteranceDelay = 0.03
+    utterance.preUtteranceDelay = 0
     utterance.postUtteranceDelay = 0.05
     speaker.speak(utterance)
   }
@@ -2600,7 +2619,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     request.timeoutInterval = 15
     request.httpBody = body
     request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
-    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.0"
+    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.1"
     request.setValue("Huayi/\(appVersion) (macOS)", forHTTPHeaderField: "User-Agent")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
