@@ -17,7 +17,6 @@ func log(_ message: String) {
 
 private let maxSelectionTranslateChars = 6000
 private let maxSelectionSpeakChars = 360
-private let automaticAIThreshold = 320
 private let localAIModel = "translategemma:12b"
 
 private enum TranslationMode: String, CaseIterable {
@@ -1827,11 +1826,59 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   }
 
   private func shouldUseLocalAI(for text: String) -> Bool {
-    if text.count >= automaticAIThreshold { return true }
-    let words = text.split(whereSeparator: { $0.isWhitespace })
-    guard words.count == 1 else { return false }
-    return text.count >= 7 &&
-      text.range(of: "^[A-Z][A-Za-z0-9+.-]*[A-Z][A-Za-z0-9+.-]*$", options: .regularExpression) != nil
+    let normalized = text
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let words = normalized.split(whereSeparator: { $0.isWhitespace })
+    guard !words.isEmpty else { return false }
+
+    // CamelCase / PascalCase product and API names benefit from contextual AI
+    // translation even when the selection is short.
+    let technicalTokens = words.filter { rawToken in
+      let token = String(rawToken).trimmingCharacters(in: .punctuationCharacters)
+      return token.count >= 7 &&
+        token.range(of: "^[A-Z][A-Za-z0-9+.-]*[A-Z][A-Za-z0-9+.-]*$", options: .regularExpression) != nil
+    }
+    if !technicalTokens.isEmpty { return true }
+
+    // Keep routing local and deterministic. Asking another model to classify
+    // the text would add latency before translation even starts.
+    var complexityScore = 0
+    let sentenceWordCounts = normalized
+      .split(whereSeparator: { ".!?;\n".contains($0) })
+      .map { sentence in sentence.split(whereSeparator: { $0.isWhitespace }).count }
+      .filter { $0 > 0 }
+    let longestSentence = sentenceWordCounts.max() ?? words.count
+    let averageSentenceLength = sentenceWordCounts.isEmpty
+      ? Double(words.count)
+      : Double(sentenceWordCounts.reduce(0, +)) / Double(sentenceWordCounts.count)
+
+    let clausePattern = "\\b(although|whereas|notwithstanding|unless|because|despite|while|which|whose|whereby|therefore|however|moreover|consequently|insofar)\\b"
+    let clauseCount = (try? NSRegularExpression(pattern: clausePattern, options: [.caseInsensitive]))?
+      .numberOfMatches(in: normalized, range: NSRange(normalized.startIndex..., in: normalized)) ?? 0
+    if clauseCount >= 2 { complexityScore += 1 }
+
+    let structuralPunctuationCount = normalized.unicodeScalars.reduce(into: 0) { count, scalar in
+      if CharacterSet(charactersIn: ",:()[]—").contains(scalar) { count += 1 }
+    }
+    if structuralPunctuationCount >= 3 { complexityScore += 1 }
+
+    let cleanedWordLengths = words.map {
+      String($0).trimmingCharacters(in: .punctuationCharacters).count
+    }.filter { $0 > 0 }
+    let longWordCount = cleanedWordLengths.filter { $0 >= 12 }.count
+    let averageWordLength = cleanedWordLengths.isEmpty
+      ? 0
+      : Double(cleanedWordLengths.reduce(0, +)) / Double(cleanedWordLengths.count)
+    if averageWordLength >= 3.5, longestSentence >= 30 { complexityScore += 2 }
+    if averageWordLength >= 3.5, averageSentenceLength >= 22 { complexityScore += 1 }
+    if longWordCount >= 2 { complexityScore += 1 }
+    if words.count >= 20, averageWordLength >= 6.3 { complexityScore += 1 }
+
+    if words.count >= 100 { complexityScore += 2 }
+    if text.count >= 900 { complexityScore += 2 }
+
+    return complexityScore >= 3
   }
 
   private func translationCacheKey(engine: TranslationEngine, sourceLanguageCode: String, text: String) -> String {
@@ -2071,11 +2118,16 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     defer { translationMode = originalMode }
 
     var failed = false
+    let simpleLongText = String(repeating: "We read books and share notes every day. ", count: 10)
+    let complexShortText = "Although the proposed method appears efficient, its assumptions, which depend on independently distributed observations, become difficult to defend because the sampling process changes over time and therefore introduces a systematic bias into the final estimate."
     let checks: [(TranslationMode, String, TranslationEngine)] = [
       (.automatic, "hello world", .google),
       (.automatic, String(repeating: "a ", count: 159), .google),
+      (.automatic, simpleLongText, .google),
+      (.automatic, complexShortText, .localAI),
       (.automatic, "OpenTelemetry", .localAI),
-      (.automatic, String(repeating: "Long translation sentence. ", count: 14), .localAI),
+      (.automatic, "OpenTelemetry correlates traces, metrics, and logs across distributed services.", .localAI),
+      (.automatic, String(repeating: "A short sentence. ", count: 60), .localAI),
       (.fast, "OpenTelemetry", .google),
       (.ai, "hello world", .localAI)
     ]
@@ -2462,9 +2514,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     }
 
     return """
-    You are a professional \(sourceName) (\(sourceCode)) to Simplified Chinese (zh) translator. Your goal is to accurately convey the meaning and nuances of the original \(sourceName) text while adhering to Simplified Chinese grammar, vocabulary, and cultural sensitivities.\(technicalTermInstruction)
-    Produce only the Simplified Chinese translation, without any additional explanations or commentary. Please translate the following \(sourceName) text into Simplified Chinese:
-
+    Translate \(sourceName) (\(sourceCode)) into natural Simplified Chinese (zh-CN). Preserve meaning, tone, and terminology.\(technicalTermInstruction) Output only the translation.
 
     \(text)
     """
@@ -2550,7 +2600,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     request.timeoutInterval = 15
     request.httpBody = body
     request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
-    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.6"
+    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.0"
     request.setValue("Huayi/\(appVersion) (macOS)", forHTTPHeaderField: "User-Agent")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 

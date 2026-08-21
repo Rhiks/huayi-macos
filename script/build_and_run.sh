@@ -6,6 +6,8 @@ APP_NAME="Huayi"
 PRODUCT_NAME="Huayi"
 BUNDLE_ID="io.github.rhiks.huayi"
 MIN_SYSTEM_VERSION="13.0"
+APP_VERSION="${HUAYI_VERSION:-1.4.0}"
+BUILD_NUMBER="${HUAYI_BUILD_NUMBER:-15}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -27,8 +29,12 @@ cleanup_staging() {
 trap cleanup_staging EXIT
 
 cd "$ROOT_DIR"
-swift build -c release
-BUILD_BINARY="$(swift build -c release --show-bin-path)/$PRODUCT_NAME"
+BUILD_ARGS=(-c release)
+if [[ "${HUAYI_UNIVERSAL:-0}" == "1" ]]; then
+  BUILD_ARGS+=(--arch arm64 --arch x86_64)
+fi
+swift build "${BUILD_ARGS[@]}"
+BUILD_BINARY="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)/$PRODUCT_NAME"
 
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
@@ -53,9 +59,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.3.6</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>14</string>
+  <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>LSUIElement</key>
