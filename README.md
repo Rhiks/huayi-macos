@@ -141,6 +141,8 @@ BIN="$(swift build -c release --show-bin-path)/Huayi"
 
 提交改动前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
+需要介绍或分享 Huayi 时，可直接使用仓库中的 [宣传素材包](docs/PROMOTION.md)，其中包含社交预览图、短帖、长帖和平台化文案。
+
 ## 第三方与许可证
 
 Huayi 源码以 [MIT License](LICENSE) 开源。Ollama、TranslateGemma、Gemma 权重和 edge-tts 是未捆绑的第三方组件，各自适用独立条款；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
