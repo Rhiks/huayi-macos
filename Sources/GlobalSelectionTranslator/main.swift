@@ -745,6 +745,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private let bubble = FloatingBubble()
   private let hoverTrigger = HoverTriggerBubble()
   private let speaker = AVSpeechSynthesizer()
+  private let systemEnglishSpeaker = NSSpeechSynthesizer()
   private var enabled = true
   private var lastText = ""
   private var lastTextAt = Date.distantPast
@@ -754,7 +755,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private var retryTimer: Timer?
   private var currentSpeechProcess: Process?
   private var currentSpeechAudioURL: URL?
-  private var speechWarmupProcess: Process?
+  private var speechWarmupURL: URL?
   private var speechGeneration = 0
   private var mouseDownPoint: CGPoint?
   private var mouseDownSourceBundleID: String?
@@ -1154,11 +1155,13 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   private func stopSpeaking() {
     speechGeneration += 1
     speaker.stopSpeaking(at: .immediate)
+    systemEnglishSpeaker.stopSpeaking()
     if let process = currentSpeechProcess, process.isRunning {
       process.terminate()
     }
     currentSpeechProcess = nil
     removeCurrentSpeechAudio()
+    removeSpeechWarmupAudio()
   }
 
   private func cancelTranslation() {
@@ -1183,7 +1186,10 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
       options: [.skipsHiddenFiles]
     ) else { return }
 
-    for file in files where file.lastPathComponent.hasPrefix("huayi-speech-") && file.pathExtension == "mp3" {
+    for file in files {
+      let isNeuralAudio = file.lastPathComponent.hasPrefix("huayi-speech-") && file.pathExtension == "mp3"
+      let isQuinnWarmup = file.lastPathComponent.hasPrefix("huayi-quinn-warmup-") && file.pathExtension == "aiff"
+      guard isNeuralAudio || isQuinnWarmup else { continue }
       let values = try? file.resourceValues(forKeys: [.isRegularFileKey])
       guard values?.isRegularFile == true else { continue }
       try? FileManager.default.removeItem(at: file)
@@ -2249,28 +2255,28 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
   }
 
   private func prewarmSystemSpeech() {
-    guard !neuralSpeechModeEnabled, englishAccent == "en-US", speechWarmupProcess == nil else { return }
+    guard !neuralSpeechModeEnabled, englishAccent == "en-US", speechWarmupURL == nil else { return }
     let outputURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("huayi-quinn-warmup-\(ProcessInfo.processInfo.processIdentifier)")
       .appendingPathExtension("aiff")
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-    process.arguments = ["-r", String(speechRate), "-o", outputURL.path, "ready"]
-    speechWarmupProcess = process
-    process.terminationHandler = { [weak self] _ in
-      try? FileManager.default.removeItem(at: outputURL)
-      DispatchQueue.main.async {
-        self?.speechWarmupProcess = nil
-        log("prewarmSystemSpeech: Configured Siri Natural voice is warm.")
-      }
+    systemEnglishSpeaker.rate = Float(speechRate)
+    speechWarmupURL = outputURL
+    guard systemEnglishSpeaker.startSpeaking("ready", to: outputURL) else {
+      removeSpeechWarmupAudio()
+      log("prewarmSystemSpeech: Warm-up could not start; on-demand speech remains available.")
+      return
     }
-    do {
-      try process.run()
-    } catch {
-      speechWarmupProcess = nil
-      try? FileManager.default.removeItem(at: outputURL)
-      log("prewarmSystemSpeech: Warm-up failed: \(error.localizedDescription)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+      guard let self, self.speechWarmupURL == outputURL else { return }
+      self.removeSpeechWarmupAudio()
+      log("prewarmSystemSpeech: Persistent Siri Natural synthesizer is warm.")
     }
+  }
+
+  private func removeSpeechWarmupAudio() {
+    guard let url = speechWarmupURL else { return }
+    try? FileManager.default.removeItem(at: url)
+    speechWarmupURL = nil
   }
 
   private func speak(_ text: String, languageCode: String) {
@@ -2435,18 +2441,26 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     guard speechGeneration == requestGeneration else { return }
 
     if languageCode.lowercased().hasPrefix("en") {
-      // `say` begins playback immediately and avoids the network and full-file
-      // synthesis wait of edge-tts. Prefer the highest-quality downloaded voice
-      // for the selected accent, with Ava Premium first for US English.
       let targetLocale = englishAccent
-      let selectedVoice = targetLocale == "en-US" ? nil : cachedEnglishVoices[targetLocale]
+      if targetLocale == "en-US" {
+        // A default NSSpeechSynthesizer produces byte-identical output to
+        // `/usr/bin/say` with the configured Siri Natural Quinn voice, while
+        // staying resident and avoiding a new process for every selection.
+        systemEnglishSpeaker.stopSpeaking()
+        systemEnglishSpeaker.rate = Float(speechRate)
+        if systemEnglishSpeaker.startSpeaking(text) {
+          log("startSystemSpeech: Persistent configured US Siri Natural voice started at rate \(speechRate).")
+          return
+        }
+        log("startSystemSpeech: Persistent Siri Natural voice could not start; falling back to say.")
+      }
+
+      let selectedVoice = cachedEnglishVoices[targetLocale]
       let process = Process()
       process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
       var arguments = ["-r", String(speechRate)]
       if targetLocale == "en-US" {
-        // Omitting `-v` is required for Apple's Siri Natural voices: `say`
-        // follows the configured Spoken Content voice (currently US Quinn).
-        log("startSystemSpeech: Starting configured US Siri Natural system voice at rate \(speechRate).")
+        log("startSystemSpeech: Starting fallback US Siri Natural say process at rate \(speechRate).")
       } else if let selectedVoice {
         arguments += ["-v", selectedVoice.name]
         log("startSystemSpeech: Starting cached local voice '\(selectedVoice.name)' (\(selectedVoice.language), quality: \(selectedVoice.quality)).")
@@ -2619,7 +2633,7 @@ final class TranslatorApp: NSObject, NSApplicationDelegate {
     request.timeoutInterval = 15
     request.httpBody = body
     request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
-    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.1"
+    let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.2"
     request.setValue("Huayi/\(appVersion) (macOS)", forHTTPHeaderField: "User-Agent")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
